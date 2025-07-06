@@ -117,92 +117,15 @@ a_share_mcp/
 要启动 A 股 MCP 服务器，请按照以下步骤操作：
 
 ```bash
-# 1. 创建虚拟环境（仅创建，不会安装任何包）
-uv venv
-
-# 2. 激活虚拟环境
-# Windows
-.venv\Scripts\activate
-# macOS/Linux
-# source .venv/bin/activate
-
-# 3. 安装所有依赖（必须在激活的虚拟环境中执行）
-uv sync
+# 使用 requirements.txt 安装依赖
 ```
 
-## 使用：在 MCP 客户端中配置服务器
-
-在支持 MCP 的客户端（如 VS Code 插件、CherryStudio 等）中，你需要配置如何启动此服务器。 **推荐使用 `uv`**。
-
-### 方法一：使用 JSON 配置的 IDE (例如 Cursor、VSCode、Trae 等)
-
-对于需要编辑 JSON 文件来配置 MCP 服务器的客户端，你需要找到对应的能配置 MCP 的地方（各个 IDE 和桌面 MCP Client 可能都不一样），并在 `mcpServers` 对象中添加一个新的条目。
-
-**JSON 配置示例 (请将路径替换为你的实际绝对路径):**
-
-```json
-{
-  "mcpServers": {
-    "a-share-mcp": {
-      "command": "uv", // 或者 uv.exe 的绝对路径, 例如: "C:\\path\\to\\uv.exe"
-      "args": [
-        "--directory",
-        "C:\\Users\\YourName\\Projects\\a_share_mcp", // 替换为你的项目根目录绝对路径，不一定是C盘，按实际的填写
-        "run",
-        "python",
-        "mcp_server.py"
-      ],
-      "transport": "stdio"
-      // "workingDirectory": "C:\\Users\\YourName\\Projects\\a_share_mcp", // 使用 uv --directory 后，此项可能不再必需，但建议保留作为备用
-    }
-    // ... other servers ...
-  }
-}
+## 运行代码
+```
+python mcp_server.py
 ```
 
-**注意事项:**
 
-- **`command`**: 确保填写的 `uv` 命令或 `uv.exe` 的绝对路径是客户端可以访问和执行的。
-- **`args`**: 确保参数列表完整且顺序正确。
-- **路径转义**: 路径需要写成双反斜杠 `\\`。
-  > 这是 Windows 系统特有的情况。如果是在 macOS 或 Linux 系统中，路径使用正斜杠/作为目录分隔符，就不需要这种转义处理。
-- **`workingDirectory`**: 虽然 `uv --directory` 应该能解决工作目录问题，但如果客户端仍然报错 `ModuleNotFoundError`，可以尝试在客户端配置中明确设置此项为项目根目录的绝对路径。
-
-### 方法二：使用 CherryStudio
-
-在 CherryStudio 的 MCP 服务器配置界面中，按如下方式填写：
-
-- **名称**: `a-share-mcp` (或自定义)
-- **描述**: `本地 A 股 MCP 服务器` (或自定义)
-- **类型**: 选择 **标准输入/输出 (stdio)**
-- **命令**: `uv` (或者填系统中绝对路径下 uv.exe)
-- **包管理源**: 默认
-- **参数**:
-
-  1. 第一个参数填: `--directory`
-  2. 第二个参数填: `C:\\Users\\YourName\\Projects\\a_share_mcp`
-  3. 第三个参数填: `run`
-  4. 第四个参数填: `python`
-  5. 第五个参数填: `mcp_server.py`
-
-  - _确保所有参数按下回车转行隔开的，否则报错（是不是手把手教学了？）_
-
-- **环境变量**: (通常留空)
-
-> Tricks（必看）:
-> 有时候在 Cherrystudio 填写好参数后，点击右上方的开关按钮，会发现没任何反应，此时只要随便点击左侧目录任一按钮，跳出 mcp 设置界面，然后再回到 mcp 设置界面，就会发现 mcp 已经闪绿灯配置成功了。
-
-**CherryStudio 使用示例:**
-理论上来说，你可以问有关 A 股的任何问题 :)
-
-![CherryStudio配置示例1](resource/img/img_1.png)
-
-![CherryStudio配置示例2](resource/img/img_2.png)
-
-**重要提示:**
-
-- 确保**命令**字段中的 `uv` 或其绝对路径有效且可执行。
-- 确保**参数**字段按顺序正确填写了五个参数。
 
 ## 工具列表
 
