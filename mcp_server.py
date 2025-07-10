@@ -1,6 +1,10 @@
 # Main MCP server file
 import logging
 from datetime import datetime
+import sys
+import os
+import platform
+import asyncio
 
 from mcp.server.fastmcp import FastMCP
 
@@ -20,14 +24,28 @@ from src.tools.analysis import register_analysis_tools
 from src.tools.technical_indicators import register_technical_indicator_tools
 from src.tools.valuation_analysis import register_valuation_analysis_tools
 
+# --- 系统特定配置 ---
+def configure_system():
+    """配置系统特定的设置"""
+    system = platform.system().lower()
+    
+    if system == 'windows':
+        # Windows 特定配置
+        if platform.machine().endswith('64'):
+            # 64位 Windows
+            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+        os.environ['PYTHONUNBUFFERED'] = '1'
+        # baostock 在 Windows TUN 模式下的配置
+        os.environ['NO_PROXY'] = 'baostock.com,*.baostock.com,sse.com.cn,szse.cn'
+
+# 应用系统配置
+configure_system()
+
 # --- Logging Setup ---
-# Call the setup function from utils
-# You can control the default level here (e.g., logging.DEBUG for more verbose logs)
-setup_logging(level=logging.INFO)
+setup_logging(level=logging.WARNING)
 logger = logging.getLogger(__name__)
 
 # --- Dependency Injection ---
-# Instantiate the data source - easy to swap later if needed
 active_data_source: FinancialDataSource = BaostockDataSource()
 
 # --- Get current date for system prompt ---
@@ -44,10 +62,7 @@ app = FastMCP(
 2. 请始终使用 get_latest_trading_date() 工具获取实际当前最近的交易日，不要依赖训练数据中的日期认知
 3. 当分析"最近"或"近期"市场情况时，必须首先调用 get_market_analysis_timeframe() 工具确定实际的分析时间范围
 4. 任何涉及日期的分析必须基于工具返回的实际数据，不得使用过时或假设的日期
-""",
-    # Specify dependencies for installation if needed (e.g., when using `mcp install`)
-    # dependencies=["baostock", "pandas"]
-)
+""")
 
 # --- 注册各模块的工具 ---
 register_stock_market_tools(app, active_data_source)
@@ -62,7 +77,12 @@ register_valuation_analysis_tools(app, active_data_source)
 
 # --- Main Execution Block ---
 if __name__ == "__main__":
-    logger.info(
-        f"Starting A-Share MCP Server via streamable-http... Today is {current_date}")
-    # Run the server using stdio transport, suitable for MCP Hosts like Claude Desktop
-    app.run(transport="streamable-http")
+    logger.info(f"Starting A-Share MCP Server... Today is {current_date}")
+    logger.info(f"Running on {platform.system()} {platform.machine()}")
+    
+    try:
+        # 使用 streamable-http 传输运行服务器
+        app.run(transport="streamable-http")
+    except Exception as e:
+        logger.error(f"服务器启动失败: {e}")
+        sys.exit(1)

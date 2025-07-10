@@ -1,11 +1,11 @@
 """
 Valuation analysis tools for MCP server.
-Provides comprehensive valuation metrics including P/E, P/B, P/S, PEG, and DCF analysis.
+Provides comprehensive valuation metrics including P/E, P/B, P/S, PEG, DCF and DDM analysis.
 """
 import logging
 import pandas as pd
 import numpy as np
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 from datetime import datetime, timedelta
 
 from mcp.server.fastmcp import FastMCP
@@ -13,6 +13,55 @@ from src.data_source_interface import FinancialDataSource, NoDataFoundError, Log
 from src.formatting.markdown_formatter import format_df_to_markdown
 
 logger = logging.getLogger(__name__)
+
+
+def _calculate_ddm_value(
+    current_dividend: float,
+    growth_rates: List[Tuple[float, int]],
+    discount_rate: float
+) -> Dict[str, float]:
+    """
+    Calculate DDM (Dividend Discount Model) valuation.
+    
+    Args:
+        current_dividend: Current annual dividend
+        growth_rates: List of (growth_rate, years) tuples for different growth phases
+        discount_rate: Required rate of return
+    
+    Returns:
+        Dictionary with DDM components and results
+    """
+    if current_dividend <= 0:
+        return {"error": "Current dividend must be positive"}
+    
+    total_value = 0
+    current_year = 0
+    projected_dividends = []
+    
+    # Calculate present value for each growth phase
+    current_div = current_dividend
+    for growth_rate, years in growth_rates:
+        for year in range(years):
+            current_year += 1
+            current_div *= (1 + growth_rate)
+            present_value = current_div / ((1 + discount_rate) ** current_year)
+            total_value += present_value
+            projected_dividends.append((current_year, current_div, present_value))
+    
+    # Calculate terminal value if there's stable growth
+    if growth_rates[-1][0] < discount_rate:  # Only if growth rate is less than discount rate
+        terminal_value = (current_div * (1 + growth_rates[-1][0])) / (discount_rate - growth_rates[-1][0])
+        terminal_pv = terminal_value / ((1 + discount_rate) ** current_year)
+        total_value += terminal_pv
+    else:
+        terminal_pv = 0
+    
+    return {
+        "intrinsic_value": total_value,
+        "projected_dividends": projected_dividends,
+        "terminal_value": terminal_pv,
+        "total_years": current_year
+    }
 
 
 def _calculate_dcf_value(cash_flows: List[float], terminal_growth_rate: float = 0.025, 
@@ -311,6 +360,169 @@ def register_valuation_analysis_tools(app: FastMCP, active_data_source: Financia
             return f"Error: Failed to calculate PEG ratio: {e}"
 
     @app.tool()
+    def calculate_ddm_valuation(
+        code: str,
+        years_back: int = 5,
+        discount_rate: float = 0.10,
+        terminal_growth_rate: float = 0.025
+    ) -> str:
+        """
+        使用股息贴现模型(DDM)计算股票的内在价值。
+
+        Args:
+            code: 股票代码，如'sh.600000'
+            years_back: 使用多少年的历史数据来计算增长率，默认5年
+            discount_rate: 贴现率/要求回报率，默认10%
+            terminal_growth_rate: 永续增长率，默认2.5%
+
+        Returns:
+            DDM估值分析报告（Markdown格式）
+        """
+        try:
+            # 获取历史分红数据
+            current_year = datetime.now().year
+            dividend_data = []
+            
+            # 收集多年的分红数据
+            for year in range(current_year - years_back, current_year + 1):
+                try:
+                    year_data = active_data_source.get_dividend_data(
+                        code=code,
+                        year=str(year)
+                    )
+                    if not year_data.empty:
+                        year_data['year'] = year
+                        dividend_data.append(year_data)
+                except (NoDataFoundError, DataSourceError):
+                    continue
+            
+            if not dividend_data:
+                return f"无法获取 {code} 的分红数据。"
+            
+            # 合并所有年份的数据
+            dividend_df = pd.concat(dividend_data, ignore_index=True)
+            
+            # 提取每股分红数据
+            annual_dividends = []
+            years = []
+            
+            for year in range(current_year - years_back, current_year + 1):
+                year_data = dividend_df[dividend_df['year'] == year]
+                if not year_data.empty:
+                    # 尝试不同的字段名
+                    dividend_fields = ['dividendPerShare', 'dividend_per_share', 'dividendsPerShare', 'div_cash_paid']
+                    total_dividend = 0
+                    for field in dividend_fields:
+                        if field in year_data.columns:
+                            try:
+                                # 将所有分红累加（可能一年有多次分红）
+                                values = year_data[field].apply(lambda x: float(x) if pd.notna(x) else 0)
+                                total_dividend = values.sum()
+                                break
+                            except (ValueError, TypeError):
+                                continue
+                    
+                    if total_dividend > 0:
+                        annual_dividends.append(total_dividend)
+                        years.append(year)
+            
+            if len(annual_dividends) < 2:
+                return f"无法获取足够的分红数据来进行 DDM 估值分析。"
+            
+            # 计算历史增长率
+            growth_rates = []
+            for i in range(1, len(annual_dividends)):
+                if annual_dividends[i-1] > 0:  # 避免除以零
+                    growth_rate = (annual_dividends[i] / annual_dividends[i-1]) - 1
+                    growth_rates.append(growth_rate)
+            
+            # 使用平均增长率作为预测增长率
+            if growth_rates:
+                historical_growth = sum(growth_rates) / len(growth_rates)
+                # 限制增长率在合理范围内
+                forecast_growth_rate = max(min(historical_growth, 0.20), 0.01)
+            else:
+                forecast_growth_rate = 0.05  # 默认5%增长率
+            
+            # 获取最新股息
+            latest_dividend = annual_dividends[-1]
+            
+            # 计算DDM估值
+            # 使用两阶段DDM模型：
+            # 1. 前5年使用预测增长率
+            # 2. 之后使用永续增长率
+            forecast_years = 5
+            pv_dividends = []
+            
+            # 第一阶段：预测增长期
+            for i in range(1, forecast_years + 1):
+                future_dividend = latest_dividend * (1 + forecast_growth_rate) ** i
+                present_value = future_dividend / (1 + discount_rate) ** i
+                pv_dividends.append(present_value)
+            
+            # 第二阶段：永续增长期（使用戈登增长模型）
+            terminal_dividend = latest_dividend * (1 + forecast_growth_rate) ** forecast_years * (1 + terminal_growth_rate)
+            terminal_value = terminal_dividend / (discount_rate - terminal_growth_rate)
+            pv_terminal_value = terminal_value / (1 + discount_rate) ** forecast_years
+            
+            # 计算每股内在价值
+            intrinsic_value = sum(pv_dividends) + pv_terminal_value
+            
+            # 获取当前市场价格
+            try:
+                market_data = active_data_source.get_real_time_quotes(code)
+                current_price = float(market_data['close'].iloc[0])
+            except Exception as e:
+                logger.warning(f"获取市场数据时出错: {e}")
+                current_price = None
+            
+            # 生成分析报告
+            report = f"# {code} DDM估值分析报告\n\n"
+            
+            report += "## 基本参数\n"
+            report += f"- 历史增长率: {historical_growth*100:.1f}%\n"
+            report += f"- 预测增长率: {forecast_growth_rate*100:.1f}%\n"
+            report += f"- 永续增长率: {terminal_growth_rate*100:.1f}%\n"
+            report += f"- 贴现率: {discount_rate*100:.1f}%\n"
+            
+            report += "\n## 历史分红数据\n"
+            report += "| 年份 | 每股分红(元) |\n"
+            report += "|------|-------------|\n"
+            for year, div in zip(years, annual_dividends):
+                report += f"| {year} | {div:.4f} |\n"
+            
+            report += "\n## 预测分红\n"
+            report += "| 年份 | 预测分红 | 现值 |\n"
+            report += "|------|----------|------|\n"
+            future_dividends = []
+            for i in range(1, forecast_years + 1):
+                future_div = latest_dividend * (1 + forecast_growth_rate) ** i
+                future_dividends.append(future_div)
+                report += f"| {current_year + i} | ¥{future_div:.4f} | ¥{pv_dividends[i-1]:.4f} |\n"
+            
+            report += f"\n永续期现值: ¥{pv_terminal_value:.4f}\n"
+            
+            report += "\n## 估值结果\n"
+            report += f"- 每股内在价值: ¥{intrinsic_value:.2f}\n"
+            if current_price is not None:
+                report += f"- 当前市场价格: ¥{current_price:.2f}\n"
+                premium = (current_price / intrinsic_value - 1) * 100
+                report += f"- 相对DDM估值: {'溢价' if premium > 0 else '折价'} {abs(premium):.1f}%\n"
+            
+            report += "\n## 估值假设和局限性\n"
+            report += "1. DDM模型假设公司能够持续稳定分红\n"
+            report += "2. 预测期增长率基于历史数据，可能不代表未来表现\n"
+            report += "3. 终值计算对永续增长率和贴现率较为敏感\n"
+            report += "4. 未考虑可能的分红政策变化\n"
+            report += "5. 建议结合其他估值方法和定性分析\n"
+            
+            return report
+            
+        except Exception as e:
+            logger.exception(f"计算 {code} 的DDM估值时出错: {str(e)}")
+            return f"计算DDM估值时发生错误: {str(e)}"
+
+    @app.tool()
     def calculate_dcf_valuation(
         code: str,
         years_back: int = 5,
@@ -318,136 +530,174 @@ def register_valuation_analysis_tools(app: FastMCP, active_data_source: Financia
         terminal_growth_rate: float = 0.025
     ) -> str:
         """
-        计算DCF（现金流贴现）估值，基于历史现金流数据进行未来现金流预测和贴现。
+        使用现金流贴现模型(DCF)计算股票的内在价值。
 
         Args:
             code: 股票代码，如'sh.600000'
-            years_back: 用于分析的历史年份数，默认5年
-            discount_rate: 折现率/WACC，默认10%
+            years_back: 使用多少年的历史数据来计算增长率，默认5年
+            discount_rate: 贴现率/WACC，默认10%
             terminal_growth_rate: 永续增长率，默认2.5%
 
         Returns:
-            包含DCF估值计算过程和结果的详细报告
+            DCF估值分析报告（Markdown格式）
         """
-        logger.info(f"Tool 'calculate_dcf_valuation' called for {code}")
-        
         try:
-            # 获取股票基本信息
-            basic_info = active_data_source.get_stock_basic_info(code=code)
-            stock_name = basic_info['code_name'].values[0] if not basic_info.empty else code
-            
-            # 收集多年现金流数据
+            # 获取历史现金流数据
             current_year = datetime.now().year
-            cash_flows = []
-            years_data = []
+            cash_flow_data = []
             
-            for i in range(years_back):
-                year = str(current_year - i - 1)
+            # 收集多年的现金流数据（使用第四季度数据作为年度数据）
+            for year in range(current_year - years_back, current_year + 1):
                 try:
-                    # 获取年度现金流数据（第4季度数据代表全年）
-                    cf_data = active_data_source.get_cash_flow_data(
-                        code=code, year=year, quarter=4
+                    year_data = active_data_source.get_cash_flow_data(
+                        code=code,
+                        year=str(year),
+                        quarter=4  # 使用第四季度数据
                     )
-                    
-                    if not cf_data.empty:
-                        # 查找经营现金流相关字段
-                        cf_fields = ['manageCashFlow', 'operatingCashFlow', 'NCFFromOA']
-                        annual_cf = None
-                        
-                        for field in cf_fields:
-                            if field in cf_data.columns:
-                                cf_value = pd.to_numeric(cf_data[field].iloc[0], errors='coerce')
-                                if pd.notna(cf_value):
-                                    annual_cf = cf_value
-                                    break
-                        
-                        if annual_cf is not None:
-                            cash_flows.append(annual_cf)
-                            years_data.append((year, annual_cf))
-                except:
+                    if not year_data.empty:
+                        year_data['year'] = year
+                        cash_flow_data.append(year_data)
+                except (NoDataFoundError, DataSourceError):
                     continue
             
-            if len(cash_flows) < 2:
-                return f"Error: Insufficient cash flow data for DCF calculation (need at least 2 years)"
+            if not cash_flow_data:
+                return f"无法获取 {code} 的现金流数据。"
             
-            # 反转数组，使其按时间顺序排列
-            cash_flows.reverse()
-            years_data.reverse()
+            # 合并所有年份的数据
+            cash_flow_df = pd.concat(cash_flow_data, ignore_index=True)
+            
+            # 提取经营现金流
+            operating_cash_flows = []
+            for _, row in cash_flow_df.iterrows():
+                # 尝试不同的字段名（不同版本的数据可能字段名不同）
+                for field in ['netCashOperating', 'NCFOperateA', 'operatingCashFlow']:
+                    if field in row and pd.notna(row[field]):
+                        try:
+                            value = float(row[field])
+                            operating_cash_flows.append(value)
+                            break
+                        except (ValueError, TypeError):
+                            continue
+            
+            if len(operating_cash_flows) < 2:
+                return f"无法获取足够的经营现金流数据来进行 DCF 估值分析。"
             
             # 计算DCF估值
             dcf_result = _calculate_dcf_value(
-                cash_flows=cash_flows,
+                cash_flows=operating_cash_flows,
                 terminal_growth_rate=terminal_growth_rate,
                 discount_rate=discount_rate
             )
             
             if "error" in dcf_result:
-                return f"Error: {dcf_result['error']}"
+                return f"DCF估值计算错误: {dcf_result['error']}"
             
-            # 获取当前股价用于比较
-            end_date = datetime.now().strftime("%Y-%m-%d")
-            start_date = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+            # 获取当前市值和负债数据
+            try:
+                # 获取实时行情数据
+                market_data = active_data_source.get_real_time_quotes(code)
+                current_price = float(market_data['close'].iloc[0])
+                
+                # 获取最新的资产负债表数据
+                balance_sheet = active_data_source.get_balance_data(
+                    code=code,
+                    year=str(current_year),
+                    quarter=4
+                )
+                
+                if balance_sheet.empty:
+                    # 尝试获取上一年的数据
+                    balance_sheet = active_data_source.get_balance_data(
+                        code=code,
+                        year=str(current_year - 1),
+                        quarter=4
+                    )
+                
+                if not balance_sheet.empty:
+                    # 尝试不同的字段名
+                    debt_fields = ['totalLiability', 'totalLiabilities', 'totalDebt']
+                    total_debt = None
+                    for field in debt_fields:
+                        if field in balance_sheet.columns:
+                            try:
+                                total_debt = float(balance_sheet[field].iloc[0])
+                                break
+                            except (ValueError, TypeError):
+                                continue
+                    
+                    if total_debt is None:
+                        total_debt = 0  # 如果无法获取负债数据，假设为0
+                else:
+                    total_debt = 0
+                
+                # 获取总股本
+                basic_info = active_data_source.get_stock_basic_info(code)
+                if not basic_info.empty and 'totalShares' in basic_info.columns:
+                    total_shares = float(basic_info['totalShares'].iloc[0])
+                else:
+                    # 如果无法获取总股本，使用成交量估算
+                    total_shares = float(market_data['volume'].iloc[0])
+                
+            except Exception as e:
+                logger.warning(f"获取市场数据时出错: {e}")
+                return f"无法获取完整的市场数据进行估值比较: {str(e)}"
             
-            price_data = active_data_source.get_historical_k_data(
-                code=code, start_date=start_date, end_date=end_date
-            )
-            
-            current_price = None
-            if not price_data.empty:
-                current_price = pd.to_numeric(price_data['close'].iloc[-1], errors='coerce')
-            
-            # 生成DCF估值报告
-            report = f"# {stock_name} ({code}) DCF估值分析\n\n"
-            
-            report += "## 模型参数\n"
-            report += f"- **折现率 (WACC)**: {discount_rate:.1%}\n"
-            report += f"- **永续增长率**: {terminal_growth_rate:.1%}\n"
-            report += f"- **预测期**: 5年\n"
-            report += f"- **历史数据期**: {len(cash_flows)}年\n\n"
-            
-            report += "## 历史现金流数据\n"
-            for year, cf in years_data:
-                report += f"- {year}年: {cf:,.0f} 万元\n"
-            
-            # 显示增长率计算
-            historical_growth = dcf_result['historical_growth']
-            forecast_growth = dcf_result['forecast_growth_rate']
-            
-            report += f"\n## 增长率分析\n"
-            report += f"- **历史复合增长率**: {historical_growth:.1%}\n"
-            report += f"- **预测增长率**: {forecast_growth:.1%} (保守取值)\n\n"
-            
-            # DCF估值结果
+            # 计算每股价值
             enterprise_value = dcf_result['enterprise_value']
-            pv_cash_flows = dcf_result['pv_cash_flows']
-            pv_terminal = dcf_result['pv_terminal_value']
+            equity_value = enterprise_value - total_debt
+            per_share_value = equity_value / total_shares if total_shares > 0 else 0
             
-            report += "## DCF估值结果\n"
-            report += f"- **预测期现金流现值**: {pv_cash_flows:,.0f} 万元\n"
-            report += f"- **终值现值**: {pv_terminal:,.0f} 万元\n"
-            report += f"- **企业价值**: {enterprise_value:,.0f} 万元\n\n"
+            # 生成分析报告
+            report = f"# {code} DCF估值分析报告\n\n"
             
-            # 与当前股价比较
-            if current_price is not None:
-                report += "## 估值比较\n"
-                report += f"- **当前股价**: {current_price:.2f} 元\n"
-                report += f"- **DCF理论价值**: 需要股本数据计算每股价值\n"
-                report += "- **说明**: DCF计算得出的是企业整体价值，需要除以总股本得到每股价值\n\n"
+            report += "## 基本参数\n"
+            report += f"- 历史增长率: {dcf_result['historical_growth']*100:.1f}%\n"
+            report += f"- 预测增长率: {dcf_result['forecast_growth_rate']*100:.1f}%\n"
+            report += f"- 永续增长率: {terminal_growth_rate*100:.1f}%\n"
+            report += f"- 贴现率(WACC): {discount_rate*100:.1f}%\n"
             
-            report += "## 重要假设与局限性\n"
-            report += "1. **现金流预测**: 基于历史数据的外推，实际业务发展可能偏离预测\n"
-            report += "2. **折现率假设**: 使用固定折现率，实际WACC可能随市场变化\n"
-            report += "3. **永续增长率**: 假设企业能够永续经营并保持稳定增长\n"
-            report += "4. **不包含债务**: 当前计算为企业价值，未扣除净债务得出股权价值\n\n"
+            report += "\n## 历史现金流数据\n"
+            report += "| 年份 | 经营现金流(亿元) |\n"
+            report += "|------|------------------|\n"
+            for year, cf in zip(range(current_year - len(operating_cash_flows) + 1, current_year + 1), operating_cash_flows):
+                report += f"| {year} | {cf/100000000:.2f} |\n"
             
-            report += "**免责声明**: DCF估值高度依赖假设条件，仅供参考，不构成投资建议。"
+            report += "\n## 估值结果\n"
+            report += f"- 企业价值(EV): ¥{enterprise_value/100000000:.2f}亿\n"
+            report += f"- 总负债: ¥{total_debt/100000000:.2f}亿\n"
+            report += f"- 权益价值: ¥{equity_value/100000000:.2f}亿\n"
+            report += f"- 每股内在价值: ¥{per_share_value:.2f}\n"
+            report += f"- 当前市场价格: ¥{current_price:.2f}\n"
             
-            logger.info(f"Successfully calculated DCF valuation for {code}")
+            # 计算溢价/折价
+            if per_share_value > 0:
+                premium = (current_price / per_share_value - 1) * 100
+                report += f"- 相对DCF估值: {'溢价' if premium > 0 else '折价'} {abs(premium):.1f}%\n"
+            
+            report += "\n## 预测现金流\n"
+            report += "| 年份 | 预测现金流(亿) | 现值(亿) |\n"
+            report += "|------|---------------|----------|\n"
+            
+            pv_sum = 0
+            for i, (cf, pv) in enumerate(zip(dcf_result['projected_cash_flows'], 
+                                           [cf/(1+discount_rate)**(i+1) for i, cf in enumerate(dcf_result['projected_cash_flows'])]), 1):
+                report += f"| {current_year + i} | ¥{cf/100000000:.2f} | ¥{pv/100000000:.2f} |\n"
+                pv_sum += pv
+            
+            report += f"\n终值现值: ¥{dcf_result['pv_terminal_value']/100000000:.2f}亿\n"
+            
+            report += "\n## 估值假设和局限性\n"
+            report += "1. DCF模型假设公司能够持续产生稳定的现金流\n"
+            report += "2. 预测期增长率基于历史数据，可能不代表未来表现\n"
+            report += "3. 终值计算对永续增长率和贴现率较为敏感\n"
+            report += "4. 未考虑可能的重大资本支出或业务转型\n"
+            report += "5. 建议结合其他估值方法和定性分析\n"
+            
             return report
             
         except Exception as e:
-            logger.exception(f"Error calculating DCF valuation for {code}: {e}")
-            return f"Error: Failed to calculate DCF valuation: {e}"
+            logger.exception(f"计算 {code} 的DCF估值时出错: {str(e)}")
+            return f"计算DCF估值时发生错误: {str(e)}"
 
     @app.tool()
     def compare_industry_valuation(
