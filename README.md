@@ -127,15 +127,20 @@ a_share_mcp/
 
 ```bash
 # 克隆项目
-git clone <your-repo-url>
+git clone https://github.com/firmmaple/a-share-mcp-server.git
 cd a-share-mcp-server
+```
 
+```bash
 # 安装基础依赖
 pip install -r requirements.txt
+```
 
+```bash
 # 可选：安装技术指标分析库（用于高级技术指标计算）
 pip install pandas-ta
 ```
+
 
 ### 3. 运行服务器
 
