@@ -207,25 +207,6 @@ python mcp_server.py
 
 欢迎提交 Issue 或 Pull Request 来帮助改进项目。贡献前请先查看现有 Issue 和文档。
 
-## ☕️ 请作者喝杯咖啡
-
-如果这个项目对你有帮助，欢迎请我喝杯咖啡 ❤️
-
-<img src="resource/img/ali.png" alt="支付宝收款码" width="300"/>
-
-### 🌟 加入我们的社区
-
-=======
-
-同时也欢迎关注我们的公众号【空指针指向量化 Agent】，获取更多量化投资和 AI 智能交易相关的干货内容！ 🚀
-
-<div style="display: flex; justify-content: space-between;">
-    <div style="text-align: center; margin-right: 20px;">
-        <p>关注公众号【空指针指向了量化 Agent】，获取更多量化投资和 AI 智能交易相关的干货内容！
-        <img src="resource/img/gzh_code.jpg" alt="公众号二维码" width="300"/>
-    </div>
-</div>
-
 ## 许可证
 
 本项目采用 MIT 许可证 - 详情请查看 LICENSE 文件
