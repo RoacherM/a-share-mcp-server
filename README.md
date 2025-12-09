@@ -14,6 +14,8 @@
 </div>
 A股mcp。
 
+A股mcp。http://0.0.0.0:3000/mcp
+
 本项目是一个基于专注于 A 股市场的 MCP 服务器，它提供股票基本信息、历史 K 线数据、财务指标、宏观经济数据等多种查询功能，理论上来说，可以回答有关 A 股市场的任何问题，无论是针对大盘还是特定股票。
 
 <div align="center">
@@ -89,13 +91,13 @@ a_share_mcp/
 
 ## 系统要求
 
-| 项目 | 要求 | 说明 |
-|:---|:---|:---|
-| **Python版本** | 3.10+ | 推荐使用最新稳定版 |
-| **操作系统** | Windows/Linux/MacOS | 全平台支持 |
-| **数据源** | Baostock (免费) | 无需付费API，感谢Baostock |
-| **可选依赖** | pandas-ta | 用于高级技术指标计算 |
-| **内存要求** | 推荐2GB+ | 用于大数据量处理 |
+| 项目                 | 要求                | 说明                      |
+| :------------------- | :------------------ | :------------------------ |
+| **Python版本** | 3.10+               | 推荐使用最新稳定版        |
+| **操作系统**   | Windows/Linux/MacOS | 全平台支持                |
+| **数据源**     | Baostock (免费)     | 无需付费API，感谢Baostock |
+| **可选依赖**   | pandas-ta           | 用于高级技术指标计算      |
+| **内存要求**   | 推荐2GB+            | 用于大数据量处理          |
 
 ## 数据更新时间
 
@@ -118,6 +120,7 @@ a_share_mcp/
 ## 快速开始
 
 ### 1. 环境要求
+
 - Python 3.10 或更高版本
 - pip 包管理器
 
@@ -133,14 +136,15 @@ cd a-share-mcp-server
 
 ```bash
 # 安装基础依赖
-pip install -r requirements.txt
+uv venv --python 3.12
+source .venv/bin/activate
+uv pip install -r requirements.txt
 ```
 
 ```bash
 # 可选：安装技术指标分析库（用于高级技术指标计算）
 pip install pandas-ta
 ```
-
 
 ### 3. 运行服务器
 
@@ -167,6 +171,12 @@ python mcp_server.py
 ```
 
 
+
+或者使用http的方式直接连接
+
+URL: http://0.0.0.0:3000/mcp
+
+![1765285292986](image/README/1765285292986.png)
 
 ## 工具列表
 
@@ -284,8 +294,9 @@ python mcp_server.py
 详细的工具接口说明请参考：**[DOCUMENTS.md](./DOCUMENTS.md)**
 
 该文档包含：
+
 - 🔧 **所有工具函数的详细参数说明**
-- 📝 **输入输出格式规范**  
+- 📝 **输入输出格式规范**
 - 💡 **使用示例和最佳实践**
 - 🏗️ **各模块功能架构说明**
 
