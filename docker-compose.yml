@@ -1,0 +1,9 @@
+services:
+  a-share-mcp:
+    build: .
+    container_name: a-share-mcp
+    ports:
+      - "3001:3000"
+    environment:
+      TZ: Asia/Shanghai
+    restart: always

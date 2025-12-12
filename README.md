@@ -154,6 +154,24 @@ python mcp_server.py
 
 服务器启动后，将在端口3000上运行，并支持MCP协议连接。
 
+### 3.1 使用 Docker 运行
+
+确保已安装 Docker（以及可选的 Docker Compose），在项目根目录执行：
+
+```bash
+# 使用 docker compose
+docker compose up -d --build
+```
+
+或仅使用 Docker：
+
+```bash
+docker build -t a-share-mcp .
+docker run --rm -p 3000:3000 --name a-share-mcp a-share-mcp
+```
+
+服务启动后可通过 `http://localhost:3000/mcp` 访问。
+
 ### 4. 配置AI助手
 
 将以下配置添加到您的AI助手（如Claude Desktop、CherryStudio等）的MCP配置中：
