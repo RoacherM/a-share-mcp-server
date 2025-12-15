@@ -7,6 +7,8 @@ import platform
 import asyncio
 
 from mcp.server.fastmcp import FastMCP
+from mcp import types as mcp_types
+from mcp.server import session as mcp_server_session
 
 # Import the interface and the concrete implementation
 from src.data_source_interface import FinancialDataSource
@@ -41,6 +43,61 @@ def configure_system():
 # 应用系统配置
 configure_system()
 
+# --- MCP Compatibility Patch ---
+def patch_mcp_server_session() -> None:
+    """
+    Make the server more tolerant of HTTP clients that:
+    - omit `notifications/initialized`
+    - send requests before initialization completes
+
+    Without this, a protocol-violating client can raise inside ServerSession and crash
+    the StreamableHTTP session task group (bringing the whole server down).
+    """
+
+    if getattr(mcp_server_session.ServerSession, "_a_share_patch_applied", False):
+        return
+
+    original_received_request = mcp_server_session.ServerSession._received_request
+    original_received_notification = (
+        mcp_server_session.ServerSession._received_notification
+    )
+
+    async def patched_received_request(self, responder):  # type: ignore[no-untyped-def]
+        try:
+            await original_received_request(self, responder)
+
+            # Some clients never send `notifications/initialized`. Treat `initialize`
+            # as completing initialization so subsequent requests don't crash the
+            # session.
+            if isinstance(responder.request.root, mcp_types.InitializeRequest):
+                self._initialization_state = mcp_server_session.InitializationState.Initialized
+        except RuntimeError as e:
+            if str(e) == "Received request before initialization was complete":
+                with responder:
+                    await responder.respond(
+                        mcp_types.ErrorData(
+                            code=mcp_types.INVALID_REQUEST,
+                            message="Server not initialized",
+                        )
+                    )
+                return
+            raise
+
+    async def patched_received_notification(self, notification):  # type: ignore[no-untyped-def]
+        try:
+            await original_received_notification(self, notification)
+        except RuntimeError as e:
+            if str(e) == "Received notification before initialization was complete":
+                return
+            raise
+
+    mcp_server_session.ServerSession._received_request = patched_received_request  # type: ignore[method-assign]
+    mcp_server_session.ServerSession._received_notification = patched_received_notification  # type: ignore[method-assign]
+    mcp_server_session.ServerSession._a_share_patch_applied = True  # type: ignore[attr-defined]
+
+
+patch_mcp_server_session()
+
 # --- Logging Setup ---
 setup_logging(level=logging.WARNING)
 logger = logging.getLogger(__name__)
@@ -53,9 +110,9 @@ current_date = datetime.now().strftime("%Y-%m-%d")
 
 # --- FastMCP App Initialization ---
 app = FastMCP(
-    server_name="a_share_data_provider",
+    name="a_share_data_provider",
     port=3000,
-    description=f"""今天是{current_date}。提供中国A股市场数据分析工具。此服务提供客观数据分析，用户需自行做出投资决策。数据分析基于公开市场信息，不构成投资建议，仅供参考。
+    instructions=f"""今天是{current_date}。提供中国A股市场数据分析工具。此服务提供客观数据分析，用户需自行做出投资决策。数据分析基于公开市场信息，不构成投资建议，仅供参考。
 
 ⚠️ 重要说明:
 1. 最新交易日不一定是今天，需要从 get_latest_trading_date() 获取
@@ -81,8 +138,16 @@ if __name__ == "__main__":
     logger.info(f"Running on {platform.system()} {platform.machine()}")
     
     try:
-        # 使用 streamable-http 传输运行服务器
-        app.run(transport="streamable-http")
+        # 使用 streamable-http 传输运行服务器（强制启用 ASGI lifespan，确保 session task group 初始化）
+        import uvicorn
+
+        uvicorn.run(
+            app.streamable_http_app(),
+            host=app.settings.host,
+            port=app.settings.port,
+            log_level=app.settings.log_level.lower(),
+            lifespan="on",
+        )
     except Exception as e:
         logger.error(f"服务器启动失败: {e}")
         sys.exit(1)
